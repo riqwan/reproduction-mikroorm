@@ -1,31 +1,43 @@
-import { Entity, MikroORM, PrimaryKey, Property } from '@mikro-orm/sqlite';
+import {
+  Entity,
+  ManyToOne,
+  MikroORM,
+  PrimaryKey,
+  Property,
+  Unique,
+} from "@mikro-orm/postgresql";
 
 @Entity()
-class User {
-
+@Unique({
+  properties: ["parent_category_id", "rank"],
+})
+class ProductCategory {
   @PrimaryKey()
   id!: number;
 
-  @Property()
-  name: string;
+  @Property({ columnType: "numeric", nullable: false, default: 0 })
+  rank: number;
 
-  @Property({ unique: true })
-  email: string;
+  @ManyToOne(() => ProductCategory, {
+    columnType: "integer",
+    fieldName: "parent_category_id",
+    nullable: true,
+    mapToPk: true,
+  })
+  parent_category_id?: number | null;
 
-  constructor(name: string, email: string) {
-    this.name = name;
-    this.email = email;
+  constructor(rank: number) {
+    this.rank = rank;
   }
-
 }
 
 let orm: MikroORM;
 
 beforeAll(async () => {
   orm = await MikroORM.init({
-    dbName: ':memory:',
-    entities: [User],
-    debug: ['query', 'query-params'],
+    dbName: "test-db",
+    entities: [ProductCategory],
+    debug: ["query", "query-params"],
     allowGlobalContext: true, // only for testing
   });
   await orm.schema.refreshDatabase();
@@ -35,17 +47,38 @@ afterAll(async () => {
   await orm.close(true);
 });
 
-test('basic CRUD example', async () => {
-  orm.em.create(User, { name: 'Foo', email: 'foo' });
-  await orm.em.flush();
-  orm.em.clear();
+test("basic CRUD example", async () => {
+  const manager = orm.em;
+  const parent = manager.create(ProductCategory, {
+    rank: 1,
+    parent_category_id: null,
+  });
 
-  const user = await orm.em.findOneOrFail(User, { email: 'foo' });
-  expect(user.name).toBe('Foo');
-  user.name = 'Bar';
-  orm.em.remove(user);
-  await orm.em.flush();
+  await manager.flush();
 
-  const count = await orm.em.count(User, { email: 'foo' });
-  expect(count).toBe(0);
+  manager.create(ProductCategory, {
+    rank: 1,
+    parent_category_id: parent.id,
+  });
+  manager.create(ProductCategory, {
+    rank: 2,
+    parent_category_id: parent.id,
+  });
+
+  await manager.flush();
+
+  await manager.fork().transactional(async (em) => {
+    const [parent, cat1, cat2] = await manager.findAll(ProductCategory, {});
+
+    cat1.rank = 2;
+    em.persist(cat1);
+
+    cat2.rank = 1;
+    em.persist(cat2);
+  });
+
+  const [_, cat1, cat2] = await manager.fork().findAll(ProductCategory, {});
+
+  expect(cat1.rank).toEqual(2);
+  expect(cat2.rank).toEqual(1);
 });
